@@ -3,7 +3,7 @@
 import { useSignRequest } from "@/hooks/useSignRequest";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface PaidLinkProps {
   articleId: string;
@@ -15,21 +15,45 @@ export function PaidLink({ articleId, children }: PaidLinkProps) {
   const [content, setContent] = useState<string>();
   const [isLoading, setIsLoading] = useState(false);
   const { primaryWallet } = useDynamicContext();
+  const [signedRequest, setSignedRequest] = useState<any>(null);
+
+  useEffect(() => {
+    const preSignRequest = async () => {
+      if (primaryWallet?.address && !signedRequest) {
+        try {
+          const request = await signRequest();
+          setSignedRequest(request);
+        } catch (error) {
+          console.error("Failed to pre-sign request:", error);
+        }
+      }
+    };
+
+    preSignRequest();
+  }, [primaryWallet?.address, signRequest, signedRequest]);
 
   const handleClick = async () => {
+    if (!signedRequest) {
+      console.error("No signed request available");
+      return;
+    }
+
     setIsLoading(true);
-    const signedRequest = await signRequest();
     const url = window.location.pathname;
-    const contentRequest = await fetch("/api/paywall", {
-      method: "POST",
-      body: JSON.stringify({ ...signedRequest, url, articleId }),
-    });
-    const contentResponse = await contentRequest.json();
-    
-    if (contentResponse.status === "unlocked") {
-      setContent(contentResponse.data[articleId].content);
-    } else {
-      console.error("Failed to unlock content");
+    try {
+      const contentRequest = await fetch("/api/paywall", {
+        method: "POST",
+        body: JSON.stringify({ ...signedRequest, url, articleId }),
+      });
+      const contentResponse = await contentRequest.json();
+      
+      if (contentResponse.data && contentResponse.data.content) {
+        setContent(contentResponse.data.content);
+      } else {
+        console.error("Failed to unlock content");
+      }
+    } catch (error) {
+      console.error("Error fetching content:", error);
     }
     setIsLoading(false);
   };
@@ -60,6 +84,7 @@ export function PaidLink({ articleId, children }: PaidLinkProps) {
           {children}
           <button 
             onClick={handleClick}
+            disabled={!signedRequest}
             className="mt-4 px-6 py-2.5 bg-gradient-to-r from-purple-600 to-blue-600 
               text-white rounded-lg font-medium
               hover:from-purple-700 hover:to-blue-700 
@@ -69,10 +94,11 @@ export function PaidLink({ articleId, children }: PaidLinkProps) {
               before:absolute before:inset-0
               before:bg-gradient-to-r before:from-white/20 before:to-transparent
               before:translate-x-[-100%] before:hover:translate-x-[100%]
-              before:transition-transform before:duration-700"
+              before:transition-transform before:duration-700
+              disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className="relative inline-flex items-center">
-              ✨ Read Full Article ✨
+              {signedRequest ? "✨ Read Full Article ✨" : "Preparing..."}
             </span>
           </button>
         </div>
