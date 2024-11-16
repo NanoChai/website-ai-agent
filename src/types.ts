@@ -5,3 +5,12 @@ export interface PaymentRequest {
   chainId: string;
   nonce?: string;
 }
+
+export interface FetchArticlesParams {
+  userSignature: string;
+  restakerSignature: string;
+  userAddress: string;
+  messageHash: string;
+  restakerAddress: string;
+  url: string;
+}
