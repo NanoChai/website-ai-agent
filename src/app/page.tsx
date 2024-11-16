@@ -36,16 +36,15 @@ export default function Home() {
     const newMessage = { role: 'user', content: userInput };
     
     try {
-      // Check for keywords
-      const hasCatKeyword = userInput.toLowerCase().includes('cat');
-      const hasDogKeyword = userInput.toLowerCase().includes('dog');
+      // Simplify keyword check to only look for dog-related content
+      const hasDogKeyword = userInput.toLowerCase().includes('dog') || 
+                           userInput.toLowerCase().includes('doge') || 
+                           userInput.toLowerCase().includes('puppy');
       
       let articleData = null;
       
-      if (hasCatKeyword || hasDogKeyword) {
-        const targetUrl = hasCatKeyword 
-          ? process.env.NEXT_PUBLIC_CATSITE_URL
-          : process.env.NEXT_PUBLIC_DOGSITE_URL;
+      if (hasDogKeyword) {
+        const targetUrl = process.env.NEXT_PUBLIC_DOGSITE_URL;
           
         const response = await fetch(`${targetUrl}/api/articles`, {
           method: 'POST',
@@ -69,11 +68,11 @@ export default function Home() {
         articleData = await response.json();
       }
 
-      // Include fetched article data in AI context
+      // Update system prompt for Doge theme
       const aiMessages = [
         { 
           role: 'system', 
-          content: 'You are a playful Dog vs Cat Battle Bot. Use the provided articles to share interesting facts and create fun comparisons between dogs and cats. Keep the tone lighthearted and entertaining.' 
+          content: 'You are a playful Doge AI assistant. Respond in a fun, meme-like way using Doge speak (like "much wow", "very smart", "such knowledge"). Share interesting facts about dogs and keep the tone lighthearted and entertaining. Occasionally use dog-related emojis 🐕 🦮 🐾.' 
         },
         ...chatHistory,
         newMessage
@@ -126,24 +125,24 @@ export default function Home() {
     }
   };
 
-  // Replace headlines with AI capabilities
+  // Update capabilities array
   const capabilities = [
     {
-      category: "Pet Battle",
-      title: "Dog vs Cat Knowledge Battle",
-      author: "Battle Bot",
+      category: "Doge Knowledge",
+      title: "Much Smart Doge AI",
+      author: "DogeBot",
       timeAgo: "Real-time",
-      excerpt: "Engage in epic battles of knowledge about dogs and cats, powered by real blog articles and AI analysis."
+      excerpt: "Very knowledge about doges and puppers. Much facts. Such entertainment. Wow!"
     }
   ];
 
-  // Replace sideNews with AI features
+  // Update features array
   const aiFeatures = [
-    "Real-time Dog & Cat Facts",
-    "Article-based Knowledge",
-    "Battle Statistics",
-    "Pet Comparisons",
-    "Fun Pet Trivia"
+    "Real-time Doge Facts",
+    "Much Article Knowledge",
+    "Very Dog Statistics",
+    "Such Breed Info",
+    "Wow Dog Trivia"
   ];
 
   return (
@@ -153,9 +152,9 @@ export default function Home() {
       <header className="border-b">
         <div className="container mx-auto px-4">
           <div className="py-6 text-center">
-            <div className="text-6xl mb-2">🐱 vs 🐕</div>
-            <h1 className="text-7xl text-black font-mono tracking-tight">Dog vs Cat Battle Bot</h1>
-            <p className="mt-2 text-black font-mono">The Ultimate Pet Knowledge Showdown</p>
+            <div className="text-6xl mb-2">🦴</div>
+            <h1 className="text-7xl text-black font-mono tracking-tight">Doge AI Assistant</h1>
+            <p className="mt-2 text-black font-mono">Much Knowledge • Very Smart • Wow</p>
           </div>
         </div>
       </header>
@@ -170,7 +169,7 @@ export default function Home() {
               </div>
             ) : chatHistory.length === 0 ? (
               <div className="h-full flex items-center justify-center text-gray-500">
-                Start a conversation about cats or dogs!
+                Start a conversation about dogs!
               </div>
             ) : (
               chatHistory.map((msg, index) => (
