@@ -4,12 +4,14 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useArticles } from "@/hooks/useArticles";
 import { FetchArticlesParams } from '@/types';
+import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 
 // Add OpenRouter API configuration
 const OPENROUTER_API_KEY = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY;
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 export default function Home() {
+  const { primaryWallet } = useDynamicContext();
   const [userInput, setUserInput] = useState('');
   const [chatHistory, setChatHistory] = useState<Array<{role: string, content: string}>>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -24,31 +26,67 @@ export default function Home() {
 
   // Add chat function
   const handleChat = async () => {
+    if (!primaryWallet?.address) {
+      return; // Early return if not logged in
+    }
+    
     if (!userInput.trim()) return;
     
     setIsLoading(true);
     const newMessage = { role: 'user', content: userInput };
     
-    // Check for cat/dog keywords
-    const hasCatKeyword = userInput.toLowerCase().includes('cat');
-    const hasDogKeyword = userInput.toLowerCase().includes('dog');
-    
     try {
-      // Fetch relevant articles if keywords are found
+      // Check for keywords
+      const hasCatKeyword = userInput.toLowerCase().includes('cat');
+      const hasDogKeyword = userInput.toLowerCase().includes('dog');
+      
+      let articleData = null;
+      
       if (hasCatKeyword || hasDogKeyword) {
-        await fetchArticles({
-          userSignature,
-          restakerSignature,
-          userAddress,
-          messageHash,
-          restakerAddress,
-          url: hasCatKeyword 
-            ? 'https://cat-blog-api.com/articles'
-            : 'https://dog-blog-api.com/articles'
+        const targetUrl = hasCatKeyword 
+          ? process.env.NEXT_PUBLIC_CATSITE_URL
+          : process.env.NEXT_PUBLIC_DOGSITE_URL;
+          
+        const response = await fetch(`${targetUrl}/api/articles`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userSignature,
+            restakerSignature,
+            userAddress,
+            messageHash,
+            restakerAddress,
+            url: `${targetUrl}/articles`
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch articles: ${response.statusText}`);
+        }
+        
+        articleData = await response.json();
+      }
+
+      // Include fetched article data in AI context
+      const aiMessages = [
+        { 
+          role: 'system', 
+          content: 'You are a playful Dog vs Cat Battle Bot. Use the provided articles to share interesting facts and create fun comparisons between dogs and cats. Keep the tone lighthearted and entertaining.' 
+        },
+        ...chatHistory,
+        newMessage
+      ];
+
+      if (articleData) {
+        aiMessages.push({
+          role: 'system',
+          content: `Here are some relevant articles: ${JSON.stringify(articleData)}`
         });
       }
 
-      const response = await fetch(API_URL, {
+      const aiResponse = await fetch(API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -56,18 +94,15 @@ export default function Home() {
         },
         body: JSON.stringify({
           model: "anthropic/claude-3-sonnet",
-          messages: [
-            { role: 'system', content: 'You are a playful Dog vs Cat Battle Bot. Use the provided articles to share interesting facts and create fun comparisons between dogs and cats. Keep the tone lighthearted and entertaining.' },
-            ...chatHistory,
-            newMessage
-          ],
+          messages: aiMessages
         }),
       });
       
-      const data = await response.json();
-      const aiResponse = { role: 'assistant', content: data.choices[0].message.content };
-      
-      setChatHistory(prev => [...prev, newMessage, aiResponse]);
+      const data = await aiResponse.json();
+      setChatHistory(prev => [...prev, newMessage, {
+        role: 'assistant',
+        content: data.choices[0].message.content
+      }]);
       setUserInput('');
     } catch (error) {
       console.error('Error:', error);
@@ -125,32 +160,45 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Add chat interface */}
+      {/* Update chat interface with login check */}
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-3xl mx-auto mb-8">
           <div className="bg-gray-50 p-4 rounded-lg h-[400px] overflow-y-auto mb-4">
-            {chatHistory.map((msg, index) => (
-              <div key={index} className={`mb-4 ${msg.role === 'user' ? 'text-right' : ''}`}>
-                <div className={`inline-block p-3 rounded-lg ${
-                  msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-200'
-                }`}>
-                  {msg.content}
-                </div>
+            {!primaryWallet?.address ? (
+              <div className="h-full flex items-center justify-center text-gray-500">
+                Please connect your wallet to start chatting
               </div>
-            ))}
+            ) : chatHistory.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-gray-500">
+                Start a conversation about cats or dogs!
+              </div>
+            ) : (
+              chatHistory.map((msg, index) => (
+                <div key={index} className={`mb-4 ${msg.role === 'user' ? 'text-right' : ''}`}>
+                  <div className={`inline-block p-3 rounded-lg ${
+                    msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-200'
+                  }`}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
           <div className="flex gap-2">
             <input
               type="text"
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
-              className="flex-1 px-4 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Ask me anything..."
+              className={`flex-1 px-4 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                !primaryWallet?.address ? 'bg-gray-100 cursor-not-allowed' : ''
+              }`}
+              placeholder={primaryWallet?.address ? "Ask me anything..." : "Connect wallet to chat"}
+              disabled={!primaryWallet?.address}
             />
             <button
               onClick={handleChat}
-              disabled={isLoading}
-              className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+              disabled={isLoading || !primaryWallet?.address}
+              className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? 'Thinking...' : 'Send'}
             </button>
