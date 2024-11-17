@@ -24,6 +24,9 @@ export default function Home() {
   const [messageHash, setMessageHash] = useState<string>('');
   const [restakerAddress, setRestakerAddress] = useState<string>('');
 
+  // Add state for tracking signature status
+  const [hasValidSignatures, setHasValidSignatures] = useState(false);
+
   // Add chat function
   const handleChat = async () => {
     if (!primaryWallet?.address) {
@@ -44,9 +47,15 @@ export default function Home() {
       let articleData = null;
       
       if (hasDogKeyword) {
+        // Construct the full URL using environment variable
         const targetUrl = process.env.NEXT_PUBLIC_DOGSITE_URL;
-          
-        const response = await fetch(`${targetUrl}/api/articles`, {
+        
+        // Ensure all required parameters are present
+        if (!userSignature || !restakerSignature || !userAddress || !messageHash || !restakerAddress) {
+          throw new Error('Missing required signature parameters');
+        }
+        
+        const response = await fetch(`${targetUrl}/api/paywall`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -61,11 +70,16 @@ export default function Home() {
           })
         });
         
-        if (!response.ok) {
-          throw new Error(`Failed to fetch articles: ${response.statusText}`);
+        if (response.status === 402) {
+          throw new Error('Payment required for accessing dog content');
         }
         
-        articleData = await response.json();
+        if (!response.ok) {
+          throw new Error(`API error: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        articleData = result.data; // Access the data property from the response
       }
 
       // Update system prompt for Doge theme
