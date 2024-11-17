@@ -5,149 +5,20 @@ import Link from 'next/link';
 import { useArticles } from "@/hooks/useArticles";
 import { FetchArticlesParams } from '@/types';
 import { useDynamicContext, useEmbeddedWallet } from "@dynamic-labs/sdk-react-core";
+import { useSignRequest } from "@/hooks/useSignRequest";
+import { signatureCache } from '@/utils/signatureCache';
 
 // Add OpenRouter API configuration
 const OPENROUTER_API_KEY = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY;
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Add SignatureCache class at the top level
-class SignatureCache {
-  private signatures: Array<{
-    userSignature: string;
-    restakerSignature: string;
-    userAddress: string;
-    messageHash: string;
-    restakerAddress: string;
-  }> = [];
-  private isFetching = false;
-  private walletAddress?: string;
-
-  private readonly SERVICE_ADDRESS = "0xefDD4C11efD4df6F1173150e89102D343ae50AA4" as `0x${string}`;
-  private readonly AMOUNT = "1";
-  private readonly CHAIN_ID = "84532";
-
-  setWalletAddress(address: string) {
-    this.walletAddress = address;
-  }
-
-  async getSignatures(): Promise<{
-    userSignature: string;
-    restakerSignature: string;
-    userAddress: string;
-    messageHash: string;
-    restakerAddress: string;
-  }> {
-    if (this.signatures.length > 0) {
-      return this.signatures.shift()!;
-    }
-
-    if (!this.isFetching) {
-      this.fetchSignatureBatch();
-    }
-
-    return await this.waitForSignature();
-  }
-
-  private async fetchSignatureBatch() {
-    this.isFetching = true;
-    try {
-      const restakerUrl = process.env.NEXT_PUBLIC_RESTAKER_URL;
-      if (!restakerUrl || !this.walletAddress) {
-        throw new Error("RESTAKER_URL or wallet address is not defined");
-      }
-
-      // Get user signature from the wallet address we stored
-      const message = "I authorize this transaction";
-      // Remove direct primaryWallet reference and use stored wallet address
-      const userSig = "placeholder_signature"; // You'll need to implement actual signing logic here
-      
-      const requests = Array(5).fill(null).map(() => 
-        fetch(`${restakerUrl}/sign-spend`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userAddress: this.walletAddress,
-            serviceAddress: this.SERVICE_ADDRESS,
-            amount: this.AMOUNT,
-            chainId: this.CHAIN_ID,
-            userSig: userSig,
-          }),
-        }).then(res => res.json())
-      );
-
-      const responses = await Promise.all(requests);
-      this.signatures.push(...responses.map(response => ({
-        userSignature: userSig,
-        restakerSignature: response.signature,
-        userAddress: this.walletAddress || "",
-        messageHash: response.messageHash,
-        restakerAddress: response.restaker
-      })));
-    } catch (error) {
-      console.error("Error fetching signatures:", error);
-      throw error;
-    } finally {
-      this.isFetching = false;
-    }
-  }
-
-  private async waitForSignature() {
-    const startTime = Date.now();
-    while (this.signatures.length === 0 && Date.now() - startTime < 5000) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    if (this.signatures.length === 0) {
-      const restakerUrl = process.env.NEXT_PUBLIC_RESTAKER_URL;
-      if (!restakerUrl) {
-        throw new Error("RESTAKER_URL is not defined");
-      }
-
-      console.log("Fetching signature");
-      
-
-      const response = await fetch(`${restakerUrl}/sign-spend`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userAddress: "", 
-          serviceAddress: this.SERVICE_ADDRESS,
-          amount: this.AMOUNT,
-          chainId: this.CHAIN_ID,
-          userSig: "hard-code",
-        }),
-      }).then(res => res.json());
-      
-      return {
-        userSignature: response.userSignature,
-        restakerSignature: response.signature,
-        userAddress: response.userAddress,
-        messageHash: response.messageHash,
-        restakerAddress: response.restaker
-      };
-    }
-
-    return this.signatures.shift()!;
-  }
-}
-
-// Create singleton instance
-const signatureCache = new SignatureCache();
-
 export default function Home() {
   const { primaryWallet } = useDynamicContext();
+  const { signRequest } = useSignRequest();
   const [userInput, setUserInput] = useState('');
   const [chatHistory, setChatHistory] = useState<Array<{role: string, content: string}>>([]);
   const [isLoading, setIsLoading] = useState(false);
   const { articles, isLoading: articlesLoading, fetchArticles } = useArticles();
-
-  // State variables for signatures
-  const [userSignature, setUserSignature] = useState<string>('');
-  const [restakerSignature, setRestakerSignature] = useState<string>('');
-  const [userAddress, setUserAddress] = useState<string>('');
-  const [messageHash, setMessageHash] = useState<string>('');
-  const [restakerAddress, setRestakerAddress] = useState<string>('');
-  const [hasValidSignatures, setHasValidSignatures] = useState(false);
 
   useEffect(() => {
     signatureCache.setWalletAddress(primaryWallet?.address || "");
@@ -173,44 +44,30 @@ export default function Home() {
       
       if (hasDogKeyword) {
         try {
-          // Pre-fetch signatures before making the paywall request
-          await signatureCache.getSignatures();
-          const signatureData = await signatureCache.getSignatures();
-          
-          // Update state with signature data
-          setUserSignature(signatureData.userSignature);
-          setRestakerSignature(signatureData.restakerSignature);
-          setUserAddress(signatureData.userAddress);
-          setMessageHash(signatureData.messageHash);
-          setRestakerAddress(signatureData.restakerAddress);
-          
-          const targetUrl = process.env.NEXT_PUBLIC_DOGSITE_URL;
-          
-          const response = await fetch(`${targetUrl}/api/paywall`, {
-            method: 'POST',
+          // Get signatures using signRequest
+          const request = await signRequest();
+          if (!request) {
+            console.error("Failed to sign request");
+            return;
+          }
+
+          const contentRequest = await fetch("/api/paywall", {
+            method: "POST",
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              userSignature: signatureData.userSignature,
-              restakerSignature: signatureData.restakerSignature,
-              userAddress: signatureData.userAddress,
-              messageHash: signatureData.messageHash,
-              restakerAddress: signatureData.restakerAddress,
-              url: `${targetUrl}/articles`
-            })
+            body: JSON.stringify({ 
+              ...request, 
+              url: `${process.env.NEXT_PUBLIC_DOGSITE_URL}/articles` 
+            }),
           });
-          
-          if (response.status === 402) {
-            throw new Error('Payment required for accessing dog content');
+          const contentResponse = await contentRequest.json();
+
+          if (contentResponse.data) {
+            articleData = contentResponse.data;
+          } else {
+            throw new Error("Failed to unlock content");
           }
-          
-          if (!response.ok) {
-            throw new Error(`API error: ${response.statusText}`);
-          }
-          
-          const result = await response.json();
-          articleData = result.data;
         } catch (signError) {
           console.error('Error getting signatures:', signError);
           throw new Error('Failed to obtain required signatures');
@@ -260,14 +117,30 @@ export default function Home() {
   };
 
   const handleArticleAnalysis = async () => {
+    if (!primaryWallet?.address) {
+      console.error("Wallet not connected");
+      return;
+    }
+
     try {
+      // Get signatures using signRequest
+      const request = await signRequest();
+      if (!request) {
+        console.error("Failed to sign request");
+        return;
+      }
+
+      if (!request?.userSignature || !request?.restakerSignature || !request?.userAddress) {
+        throw new Error("Missing required signature data");
+      }
+
       await fetchArticles({
-        userSignature,
-        restakerSignature,
-        userAddress,
-        messageHash,
-        restakerAddress,
-        url: 'https://external-api.com/articles'
+        userSignature: request.userSignature,
+        restakerSignature: request.restakerSignature,
+        userAddress: request.userAddress,
+        messageHash: request.messageHash,
+        restakerAddress: request.restakerAddress,
+        url: `${process.env.NEXT_PUBLIC_DOGSITE_URL}/articles`
       });
     } catch (error) {
       console.error('Error fetching articles:', error);
