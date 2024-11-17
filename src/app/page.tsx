@@ -4,11 +4,119 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useArticles } from "@/hooks/useArticles";
 import { FetchArticlesParams } from '@/types';
-import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
+import { useDynamicContext, useEmbeddedWallet } from "@dynamic-labs/sdk-react-core";
 
 // Add OpenRouter API configuration
 const OPENROUTER_API_KEY = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY;
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+// Add SignatureCache class at the top level
+class SignatureCache {
+  private signatures: Array<{
+    userSignature: string;
+    restakerSignature: string;
+    userAddress: string;
+    messageHash: string;
+    restakerAddress: string;
+  }> = [];
+  private isFetching = false;
+
+  private readonly SERVICE_ADDRESS = "0xefDD4C11efD4df6F1173150e89102D343ae50AA4" as `0x${string}`;
+  private readonly AMOUNT = "1";
+  private readonly CHAIN_ID = "84532";
+
+  async getSignatures(): Promise<{
+    userSignature: string;
+    restakerSignature: string;
+    userAddress: string;
+    messageHash: string;
+    restakerAddress: string;
+  }> {
+    if (this.signatures.length > 0) {
+      return this.signatures.shift()!;
+    }
+
+    if (!this.isFetching) {
+      this.fetchSignatureBatch();
+    }
+
+    return await this.waitForSignature();
+  }
+
+  private async fetchSignatureBatch() {
+    this.isFetching = true;
+    try {
+      const restakerUrl = process.env.NEXT_PUBLIC_RESTAKER_URL;
+      if (!restakerUrl) {
+        throw new Error("RESTAKER_URL is not defined");
+      }
+
+      const requests = Array(5).fill(null).map(() => 
+        fetch(`${restakerUrl}/sign-spend`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userAddress: "", // This will be filled by the caller
+            serviceAddress: this.SERVICE_ADDRESS,
+            amount: this.AMOUNT,
+            chainId: this.CHAIN_ID,
+            userSig: "hard-code",
+          }),
+        }).then(res => res.json())
+      );
+
+      const responses = await Promise.all(requests);
+      this.signatures.push(...responses.map(response => ({
+        userSignature: response.userSignature,
+        restakerSignature: response.signature,
+        userAddress: response.userAddress,
+        messageHash: response.messageHash,
+        restakerAddress: response.restaker
+      })));
+    } finally {
+      this.isFetching = false;
+    }
+  }
+
+  private async waitForSignature() {
+    const startTime = Date.now();
+    while (this.signatures.length === 0 && Date.now() - startTime < 5000) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    if (this.signatures.length === 0) {
+      const restakerUrl = process.env.NEXT_PUBLIC_RESTAKER_URL;
+      if (!restakerUrl) {
+        throw new Error("RESTAKER_URL is not defined");
+      }
+
+      const response = await fetch(`${restakerUrl}/sign-spend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userAddress: "", 
+          serviceAddress: this.SERVICE_ADDRESS,
+          amount: this.AMOUNT,
+          chainId: this.CHAIN_ID,
+          userSig: "hard-code",
+        }),
+      }).then(res => res.json());
+      
+      return {
+        userSignature: response.userSignature,
+        restakerSignature: response.signature,
+        userAddress: response.userAddress,
+        messageHash: response.messageHash,
+        restakerAddress: response.restaker
+      };
+    }
+
+    return this.signatures.shift()!;
+  }
+}
+
+// Create singleton instance
+const signatureCache = new SignatureCache();
 
 export default function Home() {
   const { primaryWallet } = useDynamicContext();
@@ -27,10 +135,10 @@ export default function Home() {
   // Add state for tracking signature status
   const [hasValidSignatures, setHasValidSignatures] = useState(false);
 
-  // Add chat function
+  // Modify handleChat function
   const handleChat = async () => {
     if (!primaryWallet?.address) {
-      return; // Early return if not logged in
+      return;
     }
     
     if (!userInput.trim()) return;
@@ -39,7 +147,6 @@ export default function Home() {
     const newMessage = { role: 'user', content: userInput };
     
     try {
-      // Simplify keyword check to only look for dog-related content
       const hasDogKeyword = userInput.toLowerCase().includes('dog') || 
                            userInput.toLowerCase().includes('doge') || 
                            userInput.toLowerCase().includes('puppy');
@@ -47,39 +154,48 @@ export default function Home() {
       let articleData = null;
       
       if (hasDogKeyword) {
-        // Construct the full URL using environment variable
-        const targetUrl = process.env.NEXT_PUBLIC_DOGSITE_URL;
-        
-        // Ensure all required parameters are present
-        if (!userSignature || !restakerSignature || !userAddress || !messageHash || !restakerAddress) {
-          throw new Error('Missing required signature parameters');
+        try {
+          // Get signatures from cache
+          const signatureData = await signatureCache.getSignatures();
+          
+          // Update state with signature data
+          setUserSignature(signatureData.userSignature);
+          setRestakerSignature(signatureData.restakerSignature);
+          setUserAddress(signatureData.userAddress);
+          setMessageHash(signatureData.messageHash);
+          setRestakerAddress(signatureData.restakerAddress);
+          
+          const targetUrl = process.env.NEXT_PUBLIC_DOGSITE_URL;
+          
+          const response = await fetch(`${targetUrl}/api/paywall`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              userSignature: signatureData.userSignature,
+              restakerSignature: signatureData.restakerSignature,
+              userAddress: signatureData.userAddress,
+              messageHash: signatureData.messageHash,
+              restakerAddress: signatureData.restakerAddress,
+              url: `${targetUrl}/articles`
+            })
+          });
+          
+          if (response.status === 402) {
+            throw new Error('Payment required for accessing dog content');
+          }
+          
+          if (!response.ok) {
+            throw new Error(`API error: ${response.statusText}`);
+          }
+          
+          const result = await response.json();
+          articleData = result.data;
+        } catch (signError) {
+          console.error('Error getting signatures:', signError);
+          throw new Error('Failed to obtain required signatures');
         }
-        
-        const response = await fetch(`${targetUrl}/api/paywall`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            userSignature,
-            restakerSignature,
-            userAddress,
-            messageHash,
-            restakerAddress,
-            url: `${targetUrl}/articles`
-          })
-        });
-        
-        if (response.status === 402) {
-          throw new Error('Payment required for accessing dog content');
-        }
-        
-        if (!response.ok) {
-          throw new Error(`API error: ${response.statusText}`);
-        }
-        
-        const result = await response.json();
-        articleData = result.data; // Access the data property from the response
       }
 
       // Update system prompt for Doge theme
