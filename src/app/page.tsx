@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useArticles } from "@/hooks/useArticles";
 import { FetchArticlesParams } from '@/types';
@@ -20,10 +20,15 @@ class SignatureCache {
     restakerAddress: string;
   }> = [];
   private isFetching = false;
+  private walletAddress?: string;
 
   private readonly SERVICE_ADDRESS = "0xefDD4C11efD4df6F1173150e89102D343ae50AA4" as `0x${string}`;
   private readonly AMOUNT = "1";
   private readonly CHAIN_ID = "84532";
+
+  setWalletAddress(address: string) {
+    this.walletAddress = address;
+  }
 
   async getSignatures(): Promise<{
     userSignature: string;
@@ -47,32 +52,40 @@ class SignatureCache {
     this.isFetching = true;
     try {
       const restakerUrl = process.env.NEXT_PUBLIC_RESTAKER_URL;
-      if (!restakerUrl) {
-        throw new Error("RESTAKER_URL is not defined");
+      if (!restakerUrl || !this.walletAddress) {
+        throw new Error("RESTAKER_URL or wallet address is not defined");
       }
 
+      // Get user signature from the wallet address we stored
+      const message = "I authorize this transaction";
+      // Remove direct primaryWallet reference and use stored wallet address
+      const userSig = "placeholder_signature"; // You'll need to implement actual signing logic here
+      
       const requests = Array(5).fill(null).map(() => 
         fetch(`${restakerUrl}/sign-spend`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            userAddress: "", // This will be filled by the caller
+            userAddress: this.walletAddress,
             serviceAddress: this.SERVICE_ADDRESS,
             amount: this.AMOUNT,
             chainId: this.CHAIN_ID,
-            userSig: "hard-code",
+            userSig: userSig,
           }),
         }).then(res => res.json())
       );
 
       const responses = await Promise.all(requests);
       this.signatures.push(...responses.map(response => ({
-        userSignature: response.userSignature,
+        userSignature: userSig,
         restakerSignature: response.signature,
-        userAddress: response.userAddress,
+        userAddress: this.walletAddress || "",
         messageHash: response.messageHash,
         restakerAddress: response.restaker
       })));
+    } catch (error) {
+      console.error("Error fetching signatures:", error);
+      throw error;
     } finally {
       this.isFetching = false;
     }
@@ -89,6 +102,9 @@ class SignatureCache {
       if (!restakerUrl) {
         throw new Error("RESTAKER_URL is not defined");
       }
+
+      console.log("Fetching signature");
+      
 
       const response = await fetch(`${restakerUrl}/sign-spend`, {
         method: "POST",
@@ -133,8 +149,13 @@ export default function Home() {
   const [restakerAddress, setRestakerAddress] = useState<string>('');
   const [hasValidSignatures, setHasValidSignatures] = useState(false);
 
+  useEffect(() => {
+    signatureCache.setWalletAddress(primaryWallet?.address || "");
+  }, [primaryWallet?.address]);
+
   const handleChat = async () => {
     if (!primaryWallet?.address) {
+      console.error("Wallet not connected");
       return;
     }
     
@@ -152,7 +173,8 @@ export default function Home() {
       
       if (hasDogKeyword) {
         try {
-          // Get signatures from cache
+          // Pre-fetch signatures before making the paywall request
+          await signatureCache.getSignatures();
           const signatureData = await signatureCache.getSignatures();
           
           // Update state with signature data
